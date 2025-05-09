@@ -1,0 +1,8 @@
+ipython
+Pathlib
+matplotlib
+numpy
+pandas
+PyGetWindow
+python-dotenv
+tensorflow

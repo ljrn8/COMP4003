@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nids_hpo"
+version = "0.1"
+requires-python = ">=3.7" 
+readme = "README.md"
+dependencies = [
+    "ipython",
+    "Pathlib",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "PyGetWindow",
+    "python-dotenv",
+    "tensorflow"
+]
+
+# [tool.setuptools]
+# packages = ["my_package"]
+# include_package_data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
