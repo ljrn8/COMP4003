@@ -8,10 +8,9 @@ import pandas as pd
 dotenv_path = os.path.join(os.path.dirname(__file__), "../.env")
 load_dotenv(dotenv_path=dotenv_path)
 
-DATA_ROOT = os.getenv("DATA_ROOT")
-if DATA_ROOT:
-    DATA_ROOT = Path(DATA_ROOT)
-     
+UNSWNB15_ROOT = Path(os.getenv("UNSWNB15_ROOT"))
+CICIDS2017_ROOT = Path(os.getenv("CICIDS2017_ROOT"))
+
 LOG_LEVEL = os.getenv("LOG_LEVEL") or "INFO"
 
 # Local Directories
