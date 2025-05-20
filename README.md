@@ -1,5 +1,5 @@
-# NIDS HPO
-COPM4003 (Sem1) Techical Contribution Repository 
+# Network Intrusion Dection + Hyperparameter Optimization (Title pending)
+COMP4003 Technical Contribution for Semester 1 
 
 
 ### Developement
