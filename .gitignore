@@ -2,3 +2,5 @@ IDS\ datasets
 interm
 interm.zip
 .vscode
+.env
+env
