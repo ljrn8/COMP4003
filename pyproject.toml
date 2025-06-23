@@ -13,7 +13,6 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas",
-    "PyGetWindow",
     "python-dotenv",
     "tensorflow"
 ]
