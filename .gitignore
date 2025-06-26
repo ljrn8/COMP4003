@@ -4,3 +4,5 @@ interm.zip
 .vscode
 .env
 env
+venv
+.venv

@@ -3,17 +3,17 @@
 #   Adapted from supplied source codes
 #
 
-from dgl import from_networkx
+# from dgl import from_networkx
 import torch.nn as nn
 import torch as th
 import torch.nn.functional as F
-import dgl.function as fn
+# import dgl.function as fn
 import networkx as nx
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-import category_encoders as ce
+# import category_encoders as ce
 from sklearn.decomposition import PCA
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -25,10 +25,10 @@ class SAGELayer(nn.Module):
     def __init__(self, ndim_in, edims, ndim_out, activation):
         super(SAGELayer, self).__init__()
         
-        ### force to output fix dimensions
+        # force to output fix dimensions
         self.W_msg = nn.Linear(ndim_in + edims, ndim_out)
         
-        ### apply weight
+        # apply weight
         self.W_apply = nn.Linear(ndim_in + ndim_out, ndim_out)
         self.activation = activation
 
@@ -103,8 +103,6 @@ def train(G, model, edge_train_mask, edge_valid_mask, epochs=8_000, test_acc=Fal
                                                  np.unique(G.edata['Attack'].cpu().numpy()),
                                                  G.edata['Attack'].cpu().numpy())
     
-    
-
     print(model)
     
     class_weights = th.FloatTensor(class_weights).cuda()
@@ -156,11 +154,13 @@ if __name__ == "__main__":
     
     
 
+"""
+
 class Preprocessing:
     
     def _prepare_pk(NF_dataframe: pd.Dataframe):
-        """Prepares primary graph keys from EGrashSAGE, combining source and IP into addr
-        """
+        # Prepares primary graph keys from EGrashSAGE, combining source and IP into addr
+        
         data = df = NF_dataframe
         pk_cols = (
             'IPV4_SRC_ADDR', 'L4_SRC_PORT', 'IPV4_DST_ADDR', 'L4_DST_PORT'
@@ -194,3 +194,5 @@ class Preprocessing:
         G.edata['h'] = th.reshape(G.edata['h'], (G.edata['h'].shape[0], 1, G.edata['h'].shape[1]))
         
         return G 
+
+"""

@@ -10,8 +10,9 @@ readme = "README.md"
 dependencies = [
     "ipython",
     "Pathlib",
+    "dgl==2.2.1",
+    "torch==2.2.1", # for dgl ??
     "matplotlib",
-    "numpy",
     "pandas",
     "python-dotenv",
     "tensorflow"

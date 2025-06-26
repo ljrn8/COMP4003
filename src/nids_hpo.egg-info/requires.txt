@@ -1,8 +1,8 @@
 ipython
 Pathlib
+dgl
+torch
 matplotlib
-numpy
 pandas
-PyGetWindow
 python-dotenv
 tensorflow
