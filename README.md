@@ -1,5 +1,6 @@
 # Network Intrusion Detection + Hyperparameter Optimization (Title pending)
-COMP4003 Technical Contribution for Semester 1 
+> COMP4003 Technical Contribution for Semester 1 
+
 
 
 ### Developement
