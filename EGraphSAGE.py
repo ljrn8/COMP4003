@@ -7,7 +7,7 @@
 import torch.nn as nn
 import torch as th
 import torch.nn.functional as F
-# import dgl.function as fn
+import dgl.function as fn
 import networkx as nx
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
@@ -15,10 +15,12 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 # import category_encoders as ce
 from sklearn.decomposition import PCA
-import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
+import dgl
+from sklearn.utils import class_weight        
 
+CLASSES = 10
 
 class SAGELayer(nn.Module):
     
@@ -85,7 +87,7 @@ class Model(nn.Module):
     def __init__(self, ndim_in, ndim_out, edim, activation, dropout):
         super().__init__()
         self.gnn = SAGE(ndim_in, ndim_out, edim, activation, dropout)
-        self.pred = MLPPredictor(ndim_out, 5)
+        self.pred = MLPPredictor(ndim_out, CLASSES)
         
     def forward(self, g, nfeats, efeats):
         h = self.gnn(g, nfeats, efeats)
@@ -95,16 +97,13 @@ class Model(nn.Module):
 def compute_accuracy(pred, labels):
     return (pred.argmax(1) == labels).float().mean().item()
        
-       
         
 def train(G, model, edge_train_mask, edge_valid_mask, epochs=8_000, test_acc=False):
-    from sklearn.utils import class_weight
+    
     class_weights = class_weight.compute_class_weight('balanced',
                                                  np.unique(G.edata['Attack'].cpu().numpy()),
                                                  G.edata['Attack'].cpu().numpy())
-    
-    print(model)
-    
+
     class_weights = th.FloatTensor(class_weights).cuda()
     criterion = nn.CrossEntropyLoss(weight = class_weights)
     
@@ -129,34 +128,71 @@ def train(G, model, edge_train_mask, edge_valid_mask, epochs=8_000, test_acc=Fal
             test_mask = ~np.array(edge_train_mask + edge_valid_mask)
             print('\nFinal test acc:', compute_accuracy(pred[test_mask], edge_label[test_mask]))
 
-
-if __name__ == "__main__":
-    import pickle
-    with open("../../interm/NF_unsw_nb15_flowgraph.pkl") as f:
-        G = pickle.load(f)
-        print('loaded graph')
-        
-    model = Model(
-        ndim_in=G.ndata['h'].shape[2], 
-        ndim_out=128, 
-        edim=G.ndata['h'].shape[2], 
-        activation=F.relu, 
-        dropout=0.2).cuda()
     
-    l = len(G.edges)
-    tr = int(l * 0.8)
-    o = l - tr
-    train_mask = np.concatenate((np.ones(tr), np.zeros(o)))
-    valid = int(o*0.5)
-    valid_mask = np.concatenate((np.zeros(tr), np.ones(valid), np.zeros(o - valid)))
-    
-    train(G, model, train_mask, valid_mask, epochs=8_000, test_acc=True)
-    
-    
-
-"""
 
 class Preprocessing:
+    def _prepare_flows(df):
+        data = df
+        pk_cols = (
+            'IPV4_SRC_ADDR', 'L4_SRC_PORT', 'IPV4_DST_ADDR', 'L4_DST_PORT'
+        )
+        for k in pk_cols:
+            assert k in data.columns, f'{k} not in columns {data.columns}'
+            data[k] = data[k].apply(str)
+            
+        data['IPV4_SRC_ADDR'] = data['IPV4_SRC_ADDR'] + ':' + data['L4_SRC_PORT']
+        data['IPV4_DST_ADDR'] = data['IPV4_DST_ADDR'] + ':' + data['L4_DST_PORT']
+        data.drop(columns=['L4_SRC_PORT','L4_DST_PORT'],inplace=True)
+    
+        data = data.drop("Label", axis=1) 
+    
+        df = data 
+        categorical = ['TCP_FLAGS','L7_PROTO','PROTOCOL', 
+                            'ICMP_IPV4_TYPE', 'FTP_COMMAND_RET_CODE', 'Attack']
+        pk = ['IPV4_SRC_ADDR','IPV4_DST_ADDR']
+        numerical = [c for c in df.columns if (c not in categorical) and (c not in pk)]
+    
+        # mean impute infinite/nan
+        def _check(df):
+            for c in numerical:
+                n = (~np.isfinite(df[c])).sum()
+                if n > 0:
+                    print(n, c)
+        _check(df)
+        df[numerical] = df[numerical].replace([np.inf, -np.inf], np.nan)
+        df[numerical] = df[numerical].fillna(df[numerical].mean())
+        _check(df)
+    
+        # paper used labelencoding for all categories
+        le = LabelEncoder()
+        for c in categorical:
+            df[c] = le.fit_transform(df[c])
+        
+        # and standradization for the rest
+        scaler = StandardScaler()
+        df[numerical] = scaler.fit_transform(df[numerical])
+    
+        attrs = [c for c in data.columns if c not in ("IPV4_SRC_ADDR", "IPV4_DST_ADDR")]
+        data['h'] = data[attrs].values.tolist()
+        return df
+    
+    def flowgraph_encode(df):
+        df = Preprocessing._prepare_flows(df)
+        G = nx.from_pandas_edgelist(
+                df, 
+                "IPV4_SRC_ADDR", "IPV4_DST_ADDR", ['h','Attack'],
+                create_using=nx.MultiGraph())
+
+        G = G.to_directed()
+        G = dgl.from_networkx(G,edge_attrs=['h','Attack'])
+        # node data is just ones
+        G.ndata['h'] = th.ones(G.num_nodes(), G.edata['h'].shape[1])
+        return G
+
+
+
+"""
+class _Preprocessing:
     
     def _prepare_pk(NF_dataframe: pd.Dataframe):
         # Prepares primary graph keys from EGrashSAGE, combining source and IP into addr
@@ -194,5 +230,5 @@ class Preprocessing:
         G.edata['h'] = th.reshape(G.edata['h'], (G.edata['h'].shape[0], 1, G.edata['h'].shape[1]))
         
         return G 
-
 """
+

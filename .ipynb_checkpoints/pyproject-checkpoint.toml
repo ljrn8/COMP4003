@@ -10,13 +10,12 @@ readme = "README.md"
 dependencies = [
     "ipython",
     "Pathlib",
-    # "dgl", manually use wheel: pip install  dgl -f https://data.dgl.ai/wheels/torch-2.4/repo.html
-    "torch==2.4.0", #
+    # "dgl", # manual install  from  https://www.dgl.ai/pages/start.html
+    "torch==2.4.0", # for dgl 
     "matplotlib",
     "pandas",
     "python-dotenv",
-    "tensorflow",
-    "sklearn"
+    "tensorflow"
 ]
 
 # [tool.setuptools]

@@ -1,8 +1,0 @@
-ipython
-Pathlib
-dgl
-torch
-matplotlib
-pandas
-python-dotenv
-tensorflow

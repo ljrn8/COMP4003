@@ -1,0 +1,10 @@
+ipython
+Pathlib
+torch==2.4.0
+matplotlib
+pandas
+python-dotenv
+# tensorflow
+sklearn
+# dgl, manually use wheel: pip install  dgl -f https://data.dgl.ai/wheels/torch-2.4/repo.html
+

@@ -1,7 +1,0 @@
-README.md
-pyproject.toml
-src/nids_hpo.egg-info/PKG-INFO
-src/nids_hpo.egg-info/SOURCES.txt
-src/nids_hpo.egg-info/dependency_links.txt
-src/nids_hpo.egg-info/requires.txt
-src/nids_hpo.egg-info/top_level.txt
