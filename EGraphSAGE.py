@@ -99,7 +99,6 @@ def compute_accuracy(pred, labels):
        
         
 def train(G, model, edge_train_mask, edge_valid_mask, epochs=8_000, test_acc=False):
-    
     class_weights = class_weight.compute_class_weight('balanced',
                                                  np.unique(G.edata['Attack'].cpu().numpy()),
                                                  G.edata['Attack'].cpu().numpy())
@@ -114,20 +113,31 @@ def train(G, model, edge_train_mask, edge_valid_mask, epochs=8_000, test_acc=Fal
     
     opt = th.optim.Adam(model.parameters())
 
+    training_accs, validation_accs = [], []
     for epoch in range(1, epochs):
         pred = model(G, node_features, edge_features).cuda()
         loss = criterion(pred[edge_train_mask], edge_label[edge_train_mask])
         opt.zero_grad()
         loss.backward()
         opt.step()
+        
+        train_acc = compute_accuracy(pred[edge_train_mask], edge_label[edge_train_mask])
+        training_accs += [train_acc]
+        valid_acc = compute_accuracy(pred[edge_valid_mask], edge_label[edge_valid_mask])
+        validation_accs += [valid_acc]
+        
         if epoch % 100 == 0:
-            print('Training acc:', compute_accuracy(pred[edge_train_mask], edge_label[edge_train_mask]))
-            print('Validation acc:', compute_accuracy(pred[edge_valid_mask], edge_label[edge_valid_mask]))
+            print('Training acc:', train_acc)
+            print('Validation acc:', validation_accs)
 
         if epoch == epochs-1 and test_acc:
             test_mask = ~np.array(edge_train_mask + edge_valid_mask)
-            print('\nFinal test acc:', compute_accuracy(pred[test_mask], edge_label[test_mask]))
-
+            test_acc = compute_accuracy(pred[test_mask], edge_label[test_mask])
+            print('\nFinal test acc:', test_acc)
+        else:
+            test_acc = None
+            
+        return training_accs, validation_accs, test_acc
     
 
 class Preprocessing:
