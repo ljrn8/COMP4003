@@ -154,7 +154,7 @@ class Preprocessing:
         data['IPV4_DST_ADDR'] = data['IPV4_DST_ADDR'] + ':' + data['L4_DST_PORT']
         data.drop(columns=['L4_SRC_PORT','L4_DST_PORT'],inplace=True)
     
-        data = data.drop("Label", axis=1) 
+        data = data.drop("Label", axis=1)  # for binary only
     
         df = data 
         categorical = ['TCP_FLAGS','L7_PROTO','PROTOCOL', 
@@ -168,6 +168,7 @@ class Preprocessing:
                 n = (~np.isfinite(df[c])).sum()
                 if n > 0:
                     print(n, c)
+                    
         _check(df)
         df[numerical] = df[numerical].replace([np.inf, -np.inf], np.nan)
         df[numerical] = df[numerical].fillna(df[numerical].mean())
