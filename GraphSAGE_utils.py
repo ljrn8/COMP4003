@@ -8,6 +8,7 @@ from sklearn.utils import class_weight
 from torch import nn
 import torch as th
 
+
 def prepare_flows(data):
     if 'L4_SRC_PORT' in data.columns:
         pk_cols = ( 'IPV4_SRC_ADDR', 'L4_SRC_PORT', 'IPV4_DST_ADDR', 'L4_DST_PORT')
@@ -26,19 +27,20 @@ def prepare_flows(data):
     pk = ['IPV4_SRC_ADDR','IPV4_DST_ADDR']
     numerical = [c for c in data.columns if (c not in categorical) and (c not in pk)]
 
-    # # mean impute infinite/nan
-    # def _check(df):
-    #     for c in numerical:
-    #         n = (~np.isfinite(df[c])).sum()
-    #         if n > 0:
-    #             print(n, c)
+    # mean impute infinite/nan
+    def _check(data):
+        for c in numerical:
+            n = (~np.isfinite(data[c])).sum()
+            if n > 0:
+                print(n, c)
                 
-    # _check(df)
-    # df[numerical] = df[numerical].replace([np.inf, -np.inf], np.nan)
-    # df[numerical] = df[numerical].fillna(df[numerical].mean())
-    # _check(df)
+    _check(data)
+    data[numerical] = data[numerical].replace([np.inf, -np.inf], np.nan)
+    data[numerical] = data[numerical].fillna(data[numerical].mean())
+    _check(data)
 
     # paper used labelencoding for all categories
+    # TODO: fix with encoder dictionary, memory overflow
     le = LabelEncoder()
     for c in categorical:
         data[c] = le.fit_transform(data[c])
@@ -49,7 +51,8 @@ def prepare_flows(data):
 
     attrs = [c for c in data.columns if c not in ("IPV4_SRC_ADDR", "IPV4_DST_ADDR")]
     data['h'] = data[attrs].values.tolist()
-    return data
+    
+    return data, le, scaler
 
 
 def to_graph(data: pd.DataFrame, line_graph=False):
@@ -67,6 +70,7 @@ def to_graph(data: pd.DataFrame, line_graph=False):
         
     return g
 
+
 def get_weighted_criterion(ref='raw/NF-ToN-IoT-v3.csv'):
     classes_df = pd.read_csv(ref, dtype='category', usecols=['Attack'])
     unique_classes = np.array(classes_df['Attack'].unique())
@@ -81,7 +85,7 @@ def get_weighted_criterion(ref='raw/NF-ToN-IoT-v3.csv'):
     criterion = nn.CrossEntropyLoss(weight = class_weights)
 
     del classes_df # memory risk
-    return unique_classes
+    return criterion
 
 
 def train_one_graph(model, dgl_linegraph, criterion, train=0.8):
@@ -98,9 +102,16 @@ def train_one_graph(model, dgl_linegraph, criterion, train=0.8):
     optimizer.zero_grad()
     labels =  G.ndata['Attack']
     
+    print('converting to geometric')
     G = from_dgl(G)
+    
+    print('pred')
     pred = model(G.x, G.edge_index)
+    
+    print('loss')
     loss = criterion(pred[train_mask, :], labels[train_mask])
+    
+    print('test loss')
     test_loss = criterion(pred[test_mask, :], labels[test_mask])
     
     return loss, test_loss
