@@ -20,7 +20,6 @@ import numpy as np
 import dgl
 from sklearn.utils import class_weight        
 
-CLASSES = 10
 
 class SAGELayer(nn.Module):
     
@@ -84,19 +83,23 @@ class MLPPredictor(nn.Module):
         
 
 class Model(nn.Module):
-    def __init__(self, ndim_in, ndim_out, edim, activation, dropout):
+    def __init__(self, ndim_in, ndim_out, edim, classes, activation, dropout):
         super().__init__()
         self.gnn = SAGE(ndim_in, ndim_out, edim, activation, dropout)
-        self.pred = MLPPredictor(ndim_out, CLASSES)
+        self.pred = MLPPredictor(ndim_out, classes)
         
     def forward(self, g, nfeats, efeats):
         h = self.gnn(g, nfeats, efeats)
         return self.pred(g, h)
     
+  
+    
     
 def compute_accuracy(pred, labels):
     return (pred.argmax(1) == labels).float().mean().item()
-       
+    
+
+    
         
 def train(G, model, edge_train_mask, edge_valid_mask, epochs=8_000, test_acc=False):
     class_weights = class_weight.compute_class_weight('balanced',
@@ -199,47 +202,3 @@ class Preprocessing:
         # node data is just ones
         G.ndata['h'] = th.ones(G.num_nodes(), G.edata['h'].shape[1])
         return G
-
-
-
-"""
-class _Preprocessing:
-    
-    def _prepare_pk(NF_dataframe: pd.Dataframe):
-        # Prepares primary graph keys from EGrashSAGE, combining source and IP into addr
-        
-        data = df = NF_dataframe
-        pk_cols = (
-            'IPV4_SRC_ADDR', 'L4_SRC_PORT', 'IPV4_DST_ADDR', 'L4_DST_PORT'
-        )
-        for k in pk_cols:
-            assert k in data.columns, f'{k} not in columns {data.columns}'
-            data[k] = data[k].apply(str)
-            
-        data['IPV4_SRC_ADDR'] = data['IPV4_SRC_ADDR'] + ':' + data['L4_SRC_PORT']
-        data['IPV4_DST_ADDR'] = data['IPV4_DST_ADDR'] + ':' + data['L4_DST_PORT']
-        data.drop(columns=['L4_SRC_PORT','L4_DST_PORT'],inplace=True)
-        return data
-
-        
-    def _graph_encode(NF_dataframe: pd.DataFrame):
-        data = NF_dataframe
-        data = Preprocessing._prepare_pk(data)
-        
-        G = nx.from_pandas_edgelist(
-            data, "IPV4_SRC_ADDR", "IPV4_DST_ADDR", ['h','Attack'],
-        create_using=nx.MultiGraph())
-    
-        
-        G = G.to_directed()
-        G = from_networkx(G,edge_attrs=['h','Attack'] )
-        G.ndata['h'] = th.ones(G.num_nodes(), G.edata['h'].shape[1])
-        G.edata['train_mask'] = th.ones(len(G.edata['h']), dtype=th.bool)
-        G.edata['train_mask'] 
-        
-        G.ndata['h'] = th.reshape(G.ndata['h'], (G.ndata['h'].shape[0], 1, G.ndata['h'].shape[1]))
-        G.edata['h'] = th.reshape(G.edata['h'], (G.edata['h'].shape[0], 1, G.edata['h'].shape[1]))
-        
-        return G 
-"""
-

@@ -88,32 +88,91 @@ def get_weighted_criterion(ref='raw/NF-ToN-IoT-v3.csv'):
     return criterion
 
 
-def train_one_graph(model, dgl_linegraph, criterion, train=0.8):
-    G = dgl_linegraph
+# for non-lingraphs
+def train_one_graph(model, G, criterion, train=0.8):
     optimizer = th.optim.Adam(model.parameters())
     model.train()
+    
+    
     
     # test/train masks
     size = G.number_of_nodes()
     train_mask = np.zeros(size)
     train_mask[:int(size*train)] = 1
     test_mask = ~np.array(train_mask, dtype=bool)
-    
+
     optimizer.zero_grad()
-    labels =  G.ndata['Attack']
+    labels =  G.edata['Attack']
+    # G = from_dgl(G)
     
-    print('converting to geometric')
-    G = from_dgl(G)
+    pred = model(G, G.ndata['h'], G.edata['h'])
     
-    print('pred')
-    pred = model(G.x, G.edge_index)
-    
-    print('loss')
     loss = criterion(pred[train_mask, :], labels[train_mask])
-    
-    print('test loss')
     test_loss = criterion(pred[test_mask, :], labels[test_mask])
-    
+
     return loss, test_loss
 
+
+def train_one_graph_batched(model, dgl_linegraph, criterion, train=0.8, batch_size=1024):
+    
+
+    G = from_dgl(dgl_linegraph)
+    labels = G.y if hasattr(G, 'y') else dgl_linegraph.ndata['Attack']
+    G.y = labels
+
+    # create train/test masks
+    size = G.num_nodes()
+    indices = np.arange(size)
+    np.random.shuffle(indices)
+    train_cutoff = int(size * train)
+    train_idx = th.tensor(indices[:train_cutoff], dtype=th.long)
+    test_idx = th.tensor(indices[train_cutoff:], dtype=th.long)
+
+    # neighbourhood loader - large graph
+    train_loader = NeighborLoader(
+        G,
+        input_nodes=train_idx,
+        num_neighbors=[25, 10, 5],
+        batch_size=batch_size,
+        shuffle=True
+    )
+
+    optimizer = th.optim.Adam(model.parameters(), lr=0.001)
+    model.train()
+
+    total_loss = 0
+    for batch in train_loader:
+        optimizer.zero_grad()
+        batch = batch.to('cpu')
+
+        out = model(batch.x, batch.edge_index)
+        loss = criterion(out, batch.y)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+
+    avg_train_loss = total_loss / len(train_loader)
+
+    # evaluation
+    model.eval()
+    with th.no_grad():
+        test_loader = NeighborLoader(
+            G,
+            input_nodes=test_idx,
+            num_neighbors=[25, 10, 5],
+            batch_size=batch_size,
+            shuffle=False
+        )
+
+        total_test_loss = 0
+        for batch in test_loader:
+            batch = batch.to('cpu')  # move to device if using GPU
+            out = model(batch.x, batch.edge_index)
+            loss = criterion(out, batch.y)
+            total_test_loss += loss.item()
+
+        avg_test_loss = total_test_loss / len(test_loader)
+
+    return avg_train_loss, avg_test_loss
 
