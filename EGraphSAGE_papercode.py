@@ -91,14 +91,45 @@ class Model(nn.Module):
     def forward(self, g, nfeats, efeats):
         h = self.gnn(g, nfeats, efeats)
         return self.pred(g, h)
-    
+
+
+class PyGWrapper(nn.Module):
+    """ PyG compatible EGraphSAGE wrapper
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model 
+
+    def forward(self, x, edge_index, edge_attr):
+        G = self.to_dgl_graph(edge_index, edge_attr, node_attr=x)
+        return self.model.forward(G, G.ndata('h'), G.edata['h'])
+
+
+    def decode(self, h, edge_index):
+        G = self.to_dgl_graph(edge_index, edge_attr=h)
+        return self.model.pred(G, G.ndata('h'), G.edata['h'])
+
+    def to_dgl_graph(self, edge_index, edge_attr, node_attr=None):
+        """ Convert PyG input to dgl graph
+        """
+        src, dst = edge_index
+        G = dgl.graph((src, dst), num_nodes=node_attr.size(0))
+        if edge_attr is not None:
+            G.edata['h'] = edge_attr
+            
+        if node_attr is None:
+            th.ones(G.number_of_nodes(), G.edata['h'].shape[1])
+        else:
+            G.ndata['h'] = node_attr
+        
+        G.ndata['h'] = th.reshape(G.ndata['h'], (G.ndata['h'].shape[0], 1, G.ndata['h'].shape[1]))
+        G.edata['h'] = th.reshape(G.edata['h'], (G.edata['h'].shape[0], 1, G.edata['h'].shape[1]))
+        return G
   
     
     
 def compute_accuracy(pred, labels):
     return (pred.argmax(1) == labels).float().mean().item()
-    
-
     
         
 def train(G, model, edge_train_mask, edge_valid_mask, epochs=8_000, test_acc=False):
