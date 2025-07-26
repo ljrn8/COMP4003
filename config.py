@@ -20,4 +20,4 @@ MODEL_DIR = Path(ROOT) / "models"
 FIGURES_DIR = Path(ROOT) / "figures"
 INTERM_DIR = Path(ROOT) / "interm"
 DATA_ROOT = Path(ROOT) / "IDS datasets"
-... # others
+...  # others

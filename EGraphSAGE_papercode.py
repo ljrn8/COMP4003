@@ -1,4 +1,4 @@
-## 
+##
 #   EGraphSAGE model (TODO: cite)
 #   Adapted from supplied source codes
 #
@@ -18,34 +18,36 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import numpy as np
 import dgl
-from sklearn.utils import class_weight        
+from sklearn.utils import class_weight
 
 
 class SAGELayer(nn.Module):
-    
+
     def __init__(self, ndim_in, edims, ndim_out, activation):
         super(SAGELayer, self).__init__()
-        
+
         # force to output fix dimensions
         self.W_msg = nn.Linear(ndim_in + edims, ndim_out)
-        
+
         # apply weight
         self.W_apply = nn.Linear(ndim_in + ndim_out, ndim_out)
         self.activation = activation
 
     def message_func(self, edges):
-        return {'m': self.W_msg(th.cat([edges.src['h'], edges.data['h']], 2))}
+        return {"m": self.W_msg(th.cat([edges.src["h"], edges.data["h"]], 2))}
 
     def forward(self, g_dgl, nfeats, efeats):
         with g_dgl.local_scope():
             g = g_dgl
-            g.ndata['h'] = nfeats
-            g.edata['h'] = efeats
+            g.ndata["h"] = nfeats
+            g.edata["h"] = efeats
             # Eq4
-            g.update_all(self.message_func, fn.mean('m', 'h_neigh'))
-            # Eq5          
-            g.ndata['h'] = F.relu(self.W_apply(th.cat([g.ndata['h'], g.ndata['h_neigh']], 2)))
-            return g.ndata['h']
+            g.update_all(self.message_func, fn.mean("m", "h_neigh"))
+            # Eq5
+            g.ndata["h"] = F.relu(
+                self.W_apply(th.cat([g.ndata["h"], g.ndata["h_neigh"]], 2))
+            )
+            return g.ndata["h"]
 
 
 class SAGE(nn.Module):
@@ -62,89 +64,95 @@ class SAGE(nn.Module):
                 nfeats = self.dropout(nfeats)
             nfeats = layer(g, nfeats, efeats)
         return nfeats.sum(1)
-    
-    
+
+
 class MLPPredictor(nn.Module):
     def __init__(self, in_features, out_classes):
         super().__init__()
         self.W = nn.Linear(in_features * 2, out_classes)
 
     def apply_edges(self, edges):
-        h_u = edges.src['h']
-        h_v = edges.dst['h']
+        h_u = edges.src["h"]
+        h_v = edges.dst["h"]
         score = self.W(th.cat([h_u, h_v], 1))
-        return {'score': score }
+        return {"score": score}
 
     def forward(self, graph, h):
         with graph.local_scope():
-            graph.ndata['h'] = h
+            graph.ndata["h"] = h
             graph.apply_edges(self.apply_edges)
-            return graph.edata['score']
-        
+            return graph.edata["score"]
+
 
 class Model(nn.Module):
     def __init__(self, ndim_in, ndim_out, edim, classes, activation, dropout):
         super().__init__()
         self.gnn = SAGE(ndim_in, ndim_out, edim, activation, dropout)
         self.pred = MLPPredictor(ndim_out, classes)
-        
+
     def forward(self, g, nfeats, efeats):
         h = self.gnn(g, nfeats, efeats)
         return self.pred(g, h)
 
 
 class PyGWrapper(nn.Module):
-    """ PyG compatible EGraphSAGE wrapper
-    """
+    """PyG compatible EGraphSAGE wrapper"""
+
     def __init__(self, model):
         super().__init__()
-        self.model = model 
+        self.model = model
 
-    def forward(self, x, edge_index, edge_attr):
-        G = self.to_dgl_graph(edge_index, edge_attr, node_attr=x)
-        return self.model.forward(G, G.ndata('h'), G.edata['h'])
-
+    def forward(self, h, edge_index):
+        G = self.to_dgl_graph(edge_index, edge_attr=h)
+        return self.model(G=G, nfeats=G.ndata("h"), efeats=G.edata["h"])
+    
 
     def decode(self, h, edge_index):
         G = self.to_dgl_graph(edge_index, edge_attr=h)
-        return self.model.pred(G, G.ndata('h'), G.edata['h'])
+        return self.model.pred(G, G.ndata("h"), G.edata["h"])
 
     def to_dgl_graph(self, edge_index, edge_attr, node_attr=None):
-        """ Convert PyG input to dgl graph
-        """
+        """Convert PyG input to dgl graph"""
         src, dst = edge_index
-        G = dgl.graph((src, dst), num_nodes=node_attr.size(0))
-        if edge_attr is not None:
-            G.edata['h'] = edge_attr
-            
-        if node_attr is None:
-            th.ones(G.number_of_nodes(), G.edata['h'].shape[1])
-        else:
-            G.ndata['h'] = node_attr
         
-        G.ndata['h'] = th.reshape(G.ndata['h'], (G.ndata['h'].shape[0], 1, G.ndata['h'].shape[1]))
-        G.edata['h'] = th.reshape(G.edata['h'], (G.edata['h'].shape[0], 1, G.edata['h'].shape[1]))
+        num_nodes = max(edge_index[0].max(), edge_index[1].max()) + 1
+        G = dgl.graph((src, dst), num_nodes=num_nodes)
+        
+        G.edata["h"] = edge_attr
+
+        if node_attr is None:
+            th.ones(G.number_of_nodes(), G.edata["h"].shape[1])
+        else:
+            G.ndata["h"] = node_attr
+
+        G.ndata["h"] = th.reshape(
+            G.ndata["h"], (G.ndata["h"].shape[0], 1, G.ndata["h"].shape[1])
+        )
+        G.edata["h"] = th.reshape(
+            G.edata["h"], (G.edata["h"].shape[0], 1, G.edata["h"].shape[1])
+        )
         return G
-  
-    
-    
+
+
 def compute_accuracy(pred, labels):
     return (pred.argmax(1) == labels).float().mean().item()
-    
-        
+
+
 def train(G, model, edge_train_mask, edge_valid_mask, epochs=8_000, test_acc=False):
-    class_weights = class_weight.compute_class_weight('balanced',
-                                                 np.unique(G.edata['Attack'].cpu().numpy()),
-                                                 G.edata['Attack'].cpu().numpy())
+    class_weights = class_weight.compute_class_weight(
+        "balanced",
+        np.unique(G.edata["Attack"].cpu().numpy()),
+        G.edata["Attack"].cpu().numpy(),
+    )
 
     class_weights = th.FloatTensor(class_weights).cuda()
-    criterion = nn.CrossEntropyLoss(weight = class_weights)
-    
-    node_features = G.ndata['h']
-    edge_features = G.edata['h']
-    edge_label = G.edata['Attack']
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+
+    node_features = G.ndata["h"]
+    edge_features = G.edata["h"]
+    edge_label = G.edata["Attack"]
     # train_mask = G.edata['train_mask']
-    
+
     opt = th.optim.Adam(model.parameters())
 
     training_accs, validation_accs = [], []
@@ -154,82 +162,89 @@ def train(G, model, edge_train_mask, edge_valid_mask, epochs=8_000, test_acc=Fal
         opt.zero_grad()
         loss.backward()
         opt.step()
-        
+
         train_acc = compute_accuracy(pred[edge_train_mask], edge_label[edge_train_mask])
         training_accs += [train_acc]
         valid_acc = compute_accuracy(pred[edge_valid_mask], edge_label[edge_valid_mask])
         validation_accs += [valid_acc]
-        
-        if epoch % 100 == 0:
-            print('Training acc:', train_acc)
-            print('Validation acc:', validation_accs)
 
-        if epoch == epochs-1 and test_acc:
+        if epoch % 100 == 0:
+            print("Training acc:", train_acc)
+            print("Validation acc:", validation_accs)
+
+        if epoch == epochs - 1 and test_acc:
             test_mask = ~np.array(edge_train_mask + edge_valid_mask)
             test_acc = compute_accuracy(pred[test_mask], edge_label[test_mask])
-            print('\nFinal test acc:', test_acc)
+            print("\nFinal test acc:", test_acc)
         else:
             test_acc = None
-            
+
         return training_accs, validation_accs, test_acc
-    
+
 
 class Preprocessing:
     def _prepare_flows(df):
         data = df
-        pk_cols = (
-            'IPV4_SRC_ADDR', 'L4_SRC_PORT', 'IPV4_DST_ADDR', 'L4_DST_PORT'
-        )
+        pk_cols = ("IPV4_SRC_ADDR", "L4_SRC_PORT", "IPV4_DST_ADDR", "L4_DST_PORT")
         for k in pk_cols:
-            assert k in data.columns, f'{k} not in columns {data.columns}'
+            assert k in data.columns, f"{k} not in columns {data.columns}"
             data[k] = data[k].apply(str)
-            
-        data['IPV4_SRC_ADDR'] = data['IPV4_SRC_ADDR'] + ':' + data['L4_SRC_PORT']
-        data['IPV4_DST_ADDR'] = data['IPV4_DST_ADDR'] + ':' + data['L4_DST_PORT']
-        data.drop(columns=['L4_SRC_PORT','L4_DST_PORT'],inplace=True)
-    
+
+        data["IPV4_SRC_ADDR"] = data["IPV4_SRC_ADDR"] + ":" + data["L4_SRC_PORT"]
+        data["IPV4_DST_ADDR"] = data["IPV4_DST_ADDR"] + ":" + data["L4_DST_PORT"]
+        data.drop(columns=["L4_SRC_PORT", "L4_DST_PORT"], inplace=True)
+
         data = data.drop("Label", axis=1)  # for binary only
-    
-        df = data 
-        categorical = ['TCP_FLAGS','L7_PROTO','PROTOCOL', 
-                            'ICMP_IPV4_TYPE', 'FTP_COMMAND_RET_CODE', 'Attack']
-        pk = ['IPV4_SRC_ADDR','IPV4_DST_ADDR']
+
+        df = data
+        categorical = [
+            "TCP_FLAGS",
+            "L7_PROTO",
+            "PROTOCOL",
+            "ICMP_IPV4_TYPE",
+            "FTP_COMMAND_RET_CODE",
+            "Attack",
+        ]
+        pk = ["IPV4_SRC_ADDR", "IPV4_DST_ADDR"]
         numerical = [c for c in df.columns if (c not in categorical) and (c not in pk)]
-    
+
         # mean impute infinite/nan
         def _check(df):
             for c in numerical:
                 n = (~np.isfinite(df[c])).sum()
                 if n > 0:
                     print(n, c)
-                    
+
         _check(df)
         df[numerical] = df[numerical].replace([np.inf, -np.inf], np.nan)
         df[numerical] = df[numerical].fillna(df[numerical].mean())
         _check(df)
-    
+
         # paper used labelencoding for all categories
         le = LabelEncoder()
         for c in categorical:
             df[c] = le.fit_transform(df[c])
-        
+
         # and standradization for the rest
         scaler = StandardScaler()
         df[numerical] = scaler.fit_transform(df[numerical])
-    
+
         attrs = [c for c in data.columns if c not in ("IPV4_SRC_ADDR", "IPV4_DST_ADDR")]
-        data['h'] = data[attrs].values.tolist()
+        data["h"] = data[attrs].values.tolist()
         return df
-    
+
     def flowgraph_encode(df):
         df = Preprocessing._prepare_flows(df)
         G = nx.from_pandas_edgelist(
-                df, 
-                "IPV4_SRC_ADDR", "IPV4_DST_ADDR", ['h','Attack'],
-                create_using=nx.MultiGraph())
+            df,
+            "IPV4_SRC_ADDR",
+            "IPV4_DST_ADDR",
+            ["h", "Attack"],
+            create_using=nx.MultiGraph(),
+        )
 
         G = G.to_directed()
-        G = dgl.from_networkx(G,edge_attrs=['h','Attack'])
+        G = dgl.from_networkx(G, edge_attrs=["h", "Attack"])
         # node data is just ones
-        G.ndata['h'] = th.ones(G.num_nodes(), G.edata['h'].shape[1])
+        G.ndata["h"] = th.ones(G.num_nodes(), G.edata["h"].shape[1])
         return G
