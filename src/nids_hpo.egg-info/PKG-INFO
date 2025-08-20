@@ -1,3 +1,10 @@
+Metadata-Version: 2.4
+Name: nids_hpo
+Version: 0.1
+Requires-Python: >=3.7
+Description-Content-Type: text/markdown
+Requires-Dist: ipython
+
 # Network Intrusion Detection + Hyperparameter Optimization (Title pending)
 > COMP4003 Technical Contribution for Semester 1 
 
