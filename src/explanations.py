@@ -9,20 +9,22 @@ import torch
 import networkx as nx
 import pandas as pd
 import numpy as np
-
 import torch_geometric
-from torch_geometric.explain import Explainer, CaptumExplainer, DummyExplainer, GNNExplainer
-from torch_geometric.explain.metric import *
-from torch_geometric.nn.models.basic_gnn import GraphSAGE
-from torch_geometric.utils import from_dgl
-from tqdm import tqdm
-from torch_geometric.explain import ModelConfig
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
 import dgl
 import numpy as np
 import scienceplots
+import pickle 
+
+from torch_geometric.explain.metric import *
+from torch_geometric.utils import from_dgl
+from tqdm import tqdm
+from torch_geometric.data import Data 
+
+with open('../../interm/label_encoders.pkl', 'rb') as f:
+    le = pickle.load(f) 
+    
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 def get_batch(data, batch_size=5000):
     all_data = data.copy()
@@ -36,6 +38,26 @@ def get_batch(data, batch_size=5000):
             all_data = all_data.drop(batch.index)
             yield batch
 
+def yield_class_graphs(G):
+    benign_idx =  le['Attack'].transform(['Benign'])
+    for attack in le['Attack'].classes_:
+        idx = le['Attack'].transform([attack])
+
+        mask = (G.Attack == idx) | (G.Attack == benign_idx)
+        node_idx = mask.nonzero(as_tuple=True)[0]
+        edge_index, _ = torch_geometric.utils.subgraph(
+            node_idx,
+            G.edge_index,
+            relabel_nodes=True,
+        )
+        
+        subG = Data(
+            x=G.x[node_idx],
+            edge_index=edge_index,
+            Attack=G.Attack[node_idx]
+        )
+        
+        yield attack, subG
 
 def to_graph(data):
     G = nx.from_pandas_edgelist(data, source='src', 
@@ -66,95 +88,68 @@ def fidelities(y_pred, y_mask, y_imask, y):
     fp = ((y_pred == y).float() - (y_imask == y).float()).abs().mean()
     return fp, fn
 
-def plot_sparsity_curves(metrics_list, legend=None, s=3):
-    # plt.style.use(['science','no-latex'])
-    with plt.style.context('science'): 
-           
-        for metrics in metrics_list:
-            plt.plot(metrics['s'], metrics['fid-'])
-            plt.scatter(metrics['s'], metrics['fid-'], s=s)
-        
-        plt.title('Sparsity Vs Fidelity-')
-        if legend: plt.legend(legend)
-        plt.show()
-        
-        for metrics in metrics_list:
-            plt.plot(metrics['s'], metrics['fid+'])
-            plt.scatter(metrics['s'], metrics['fid+'], s=s)
-        
-        plt.title('Sparsity Vs Fidelity+')
-        if legend: plt.legend(legend)
-        plt.show()
-        
-        for metrics in metrics_list:
-            plt.plot(metrics['s'], metrics['c'])
-            plt.scatter(metrics['s'], metrics['c'], s=s)
-        
-        plt.title('Sparsity Vs Characterisation Score')
-        if legend: plt.legend(legend)
-        plt.show()
-        
-        
-def get_masked_prediction(model, sparsity, explanations, windows_size, df):
-    l = {'y': [], 'yp': [], 'ypm': [], 'ypmi': []}
-    for batch, expl in zip(get_batch(df, batch_size=windows_size), explanations):
-        
-        # sparsity restriction is computed per-batch
-        # due to memory limitations
-        soft_mask = expl.node_mask
-        flat_mask = soft_mask.flatten()
-        k = int(sparsity * flat_mask.numel())
-        threshold = torch.topk(flat_mask, k).values[-1]
-        mask = soft_mask > threshold
-        
-        batch_G = to_graph(batch)
-        l['y'].append(batch_G.Attack)
-        l['yp'].append(model(batch_G.x, batch_G.edge_index).argmax(axis=1))
-        l['ypm'].append(model(batch_G.x * mask, batch_G.edge_index).argmax(axis=1))
-        l['ypmi'].append(model(batch_G.x * (~mask), batch_G.edge_index).argmax(axis=1))
 
-    y, y_pred, y_mask, y_imask = [np.concat(ll) for ll in l]
-    fidm = np.abs(((y_pred == y).astype(float) - (y_mask == y)).astype(float)).mean()
-    fidp = np.abs(((y_pred == y).astype(float) - (y_imask == y)).astype(float)).mean()
-    return fidp, fidm
-
-
-def explain_pyG(G, model, explainer, window_size, df):
-    explanations = []
-    for batch in tqdm(get_batch(df, batch_size=window_size)):
-        batched_G = to_graph(batch)
-        explanation = explainer(batched_G.x, 
-                                batched_G.edge_index, 
-                                target=batched_G.Attack)
-        
-        explanations.append(explanation)
-        
-    metrics = {'fid+': [], 'fid-': [], 's': [], 'c': [], 'k': []}
+def evaluate_softmask(model, G, soft_mask):
+    (y_pred, ym_pred, ymi_pred), y_true = masked_prediction(
+        soft_mask, model, G, hardmask=False), G.Attack
     
-    for s in tqdm(np.arange(0.1, 1, 0.1)):
-        fn, fp = get_masked_prediction(
-            s, 
-            explanations=explanations)  
-          
-        metrics['fid+'].append(fp)
-        metrics['fid-'].append(fn)
+    m = y_true != 0 # 0 = benign
+    fp, fn = fidelities(y_pred[m], ym_pred[m], ymi_pred[m], y_true[m])
+    c = characterization_score(fp, fn) if (fp * fn) != 0 else 0
+    return fp, fn, c
+
+
+def evaluate_pyG_explainer(model, G, explainer):
+    metrics = {}
+    for attack, subG in yield_class_graphs(G):
+        if attack == 'Benign': 
+            continue
+        print(attack)
+        
+        # explain
+        explanation = explainer(
+            x=subG.x.to(device),
+            edge_index=subG.edge_index.to(device),
+            target=subG.Attack,
+        )
+        metrics[attack] = explanation
+        
+        # softmask metrics
+        fp, fn, c = evaluate_softmask(
+            model, subG, explanation.node_mask)
+        metrics[f'{attack} softmask metrics'] = fp, fn, c
+        print(f'\tfp: {fp:.3f}')
+        print(f'\tfn: {fn:.3f}')
+        print(f'\tc: {c:.3f}')
+        
+        # sparsity curve
+        metrics[f'{attack} sparsity curve'] = evaluate_sparsity_threshholds(
+            model, subG, explanation.node_mask
+        )  
+    
+    return metrics
+   
+   
+def evaluate_sparsity_threshholds(model, G, softmask, ticks=np.arange(0.1, 1, 0.1)) :
+    sparsity_curve = {'fid+': [], 'fid-': [], 's': [], 'c': [], 'k': []}
+    for s in tqdm(ticks):
+        flat_mask = softmask.flatten()
+        k = int(s * flat_mask.numel())
+        threshold = torch.topk(flat_mask, k).values[-1]
+        new_mask = (softmask >= threshold).float()
+        
+        (y_pred, ym_pred, ymi_pred), y_true = masked_prediction(
+            new_mask.detach().numpy().astype(bool), model, G, hardmask=True), G.Attack
+        m = y_true != 0 # 0 = benign
+        
+        fp, fn = fidelities(y_pred[m], ym_pred[m], ymi_pred[m], y_true[m])
+        sparsity_curve['fid+'].append(fp)
+        sparsity_curve['fid-'].append(fn)
+        
         c = characterization_score(fp, fn) if (fp * fn) != 0 else 0
-        metrics['c'].append(c)
-        metrics['s'].append(s)
-        
-    metrics['softmask fidelity'] = fidelity(explainer, explanation)
-
-    y_pred, ym_pred, ymi_pred = masked_prediction(
-        explanation.node_mask, model, G, hardmask=False)
-
-    for idx in range(y_pred.max()):
-        attack = target_encoder.inverse_transform([idx])[0]
-        fp, fn = fidelities(y_pred= y_pred == idx, 
-                            y_mask= ym_pred == idx, 
-                            y_imask= ymi_pred == idx,
-                            y= G.Attack==idx)
-
-        w = (G.Attack==idx).float().mean()
-        c = characterization_score(fp, fn, pos_weight=w, neg_weight=1-w) if fp*fn > 0 else 0
-        
-        metrics[f'softmask fidelity {attack}'] = fp, fn, c
+        sparsity_curve['c'].append(c)
+        sparsity_curve['s'].append(s)
+        sparsity_curve['k'].append(k)
+            
+    return sparsity_curve
+       
