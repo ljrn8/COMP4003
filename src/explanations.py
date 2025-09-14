@@ -15,12 +15,13 @@ import numpy as np
 import scienceplots
 import pickle 
 
+from config import INTERM_DIR
 from torch_geometric.explain.metric import *
 from torch_geometric.utils import from_dgl
 from tqdm import tqdm
 from torch_geometric.data import Data 
 
-with open('../../interm/label_encoders.pkl', 'rb') as f:
+with open(INTERM_DIR / 'label_encoders.pkl', 'rb') as f:
     le = pickle.load(f) 
     
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
