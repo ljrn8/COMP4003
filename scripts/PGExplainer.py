@@ -20,6 +20,7 @@ from torch_geometric.explain import (
 	CaptumExplainer,
 	DummyExplainer,
 	GNNExplainer,
+    PGExplainer
 )
 from torch_geometric.explain.metric import *
 from torch_geometric.nn.models.basic_gnn import GraphSAGE
@@ -143,21 +144,12 @@ for attack, subG in yield_class_graphs(pyg_lg):
 	# 			fan_motifs.append(lg_nodes)
 
 	x = subG.x[:, :49]
-
+	
+	expl = PGExplainer()
+    
 	explainer = Explainer(
 		model=model,
-		algorithm=NIDSExplainer(
-			epochs=100,
-			node_times=start_times,
-			motif_groups=(star_motifs + fan_motifs),
-            model=model,
-            edge_index=subG.edge_index,
-            x=x,
-            
-            tv_coef=0.5,
-			motif_coef=0.0,
-            align_coef=0.0,
-		),
+		algorithm=expl,
 		explanation_type="phenomenon",
 		node_mask_type="attributes",
 		edge_mask_type=None,
@@ -195,7 +187,7 @@ for attack, subG in yield_class_graphs(pyg_lg):
 
 
 metrics['epoch metrics'] = explainer.algorithm.epoch_metrics
-with open('../interm/gnne_adapted_TS_only_metrics.pkl', 'wb') as f:
+with open('../interm/gnne_adapted_embedds_only_metrics.pkl', 'wb') as f:
     pickle.dump(metrics, f)
     
     
