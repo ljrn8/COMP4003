@@ -21,11 +21,10 @@ from torch_geometric.utils import from_dgl
 from tqdm import tqdm
 from torch_geometric.data import Data 
 
-with open(INTERM_DIR / 'label_encoders.pkl', 'rb') as f:
+with open(INTERM_DIR / 'Bot_IoT/label_encoders.pkl', 'rb') as f:
     le = pickle.load(f) 
     
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
 
 def get_batch(data, batch_size=5000):
     all_data = data.copy()
@@ -71,7 +70,6 @@ def to_graph(data):
     g = g.line_graph(shared=True)
     return from_dgl(g) 
 
-
 def masked_prediction(mask, model, G, hardmask=True):
     if not hardmask:
         inv_mask = 1-mask
@@ -83,12 +81,10 @@ def masked_prediction(mask, model, G, hardmask=True):
     ymi_pred = model(G.x*inv_mask, G.edge_index).argmax(axis=1)
     return y_pred, ym_pred, ymi_pred
 
-
 def fidelities(y_pred, y_mask, y_imask, y):
     fn = ((y_pred == y).float() - (y_mask == y).float()).abs().mean()
     fp = ((y_pred == y).float() - (y_imask == y).float()).abs().mean()
     return fp, fn
-
 
 def evaluate_softmask(model, G, soft_mask):
     (y_pred, ym_pred, ymi_pred), y_true = masked_prediction(
@@ -98,7 +94,6 @@ def evaluate_softmask(model, G, soft_mask):
     fp, fn = fidelities(y_pred[m], ym_pred[m], ymi_pred[m], y_true[m])
     c = characterization_score(fp, fn) if (fp * fn) != 0 else 0
     return fp, fn, c
-
 
 def evaluate_pyG_explainer(model, G, explainer):
     metrics = {}
@@ -129,7 +124,6 @@ def evaluate_pyG_explainer(model, G, explainer):
         )  
     
     return metrics
-   
    
 def evaluate_sparsity_threshholds(model, G, softmask, ticks=np.arange(0.1, 1, 0.1)) :
     sparsity_curve = {'fid+': [], 'fid-': [], 's': [], 'c': [], 'k': []}
