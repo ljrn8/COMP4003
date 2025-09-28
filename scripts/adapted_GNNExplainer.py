@@ -33,44 +33,28 @@ from torch_geometric.transforms import LineGraph
 from torch_geometric.utils import from_dgl
 from diptest import diptest
 from sklearn.metrics import classification_report
-import os 
+import os
 from pathlib import Path
 
-def load_data():
-    test = pd.read_csv(INTERM_DIR / "Bot_IoT/BoT_test.csv")
-    attrs = [
-        c
-        for c in test.columns
-        if c
-        not in (
-            "src",
-            "dst",
-            "Attack",
-            "x",
-            "IPV4_SRC_ADDR_metadata",
-            "L4_SRC_PORT_metadata",
-            "IPV4_DST_ADDR_metadata",
-            "L4_DST_PORT_metadata",
-        )
-    ]
-    test["x"] = test[attrs].values.tolist()
-    return test
 
-
-def motif_linegraph(data: pd.DataFrame):
+def motif_attached_linegraph(processed_flows: pd.DataFrame):
     nx_g = nx.from_pandas_edgelist(
-        data,
+        processed_flows,
         source="src",
         target="dst",
         edge_attr=["x", "Attack"],
-        create_using=nx.DiGraph(),
+        create_using=nx.MultiGraph(),
     )
+
+    nx_g = nx_g.to_directed()
 
     # DGL graph + edge motifs
     dgl_g = dgl.from_networkx(nx_g, edge_attrs=["x", "Attack"])
+
     src, dst = dgl_g.edges()
     out_deg = dgl_g.out_degrees()
     in_deg = dgl_g.in_degrees()
+
     scanning_star_nodes = (out_deg > 10).nonzero(as_tuple=True)[0]
     fan_nodes = (in_deg > 10).nonzero(as_tuple=True)[0]
 
@@ -82,82 +66,45 @@ def motif_linegraph(data: pd.DataFrame):
     dgl_g.edata["x"] = torch.hstack([dgl_g.edata["x"], new.T])
     print(dgl_g.edata["x"].shape)
 
-    pyg_lg = from_dgl(dgl_g)
-    pyg_lg.num_nodes = int(pyg_lg.edge_index.max()) + 1
-    return pyg_lg
+    dgl_lg = dgl_g.line_graph(shared=True)
+    pyg_lg = from_dgl(dgl_lg)
+    return pyg_lg, dgl_g
 
 
-def get_models(path):
-    def load_model(path):
-        model = GraphSAGE(
-            49,
-            hidden_channels=256,
-            out_channels=1,
-            num_layers=2,
-        ).to(device)
-        model.load_state_dict(torch.load(path))
-        model.eval()
-        return model
-        
-    models = {
-        attack: load_model(Path(path) / attack) for attack in os.listdir(path)
-    }
-    
-    print(f'models dict: {models}')
-    return model
-    
-    
-def yeild_attack_problems(flows, models_path, label_encoder):
-    models = get_models(models_path)
-    for attack, model in models.items():
-        binary_flow = copy.deepcopy(flows)
-        class_idx = label_encoder.transform((attack))
-        binary_flow["Attack"] = np.array(binary_flow["Attack"]) == class_idx
-        yield model, binary_flow, attack
-   
-   
-def eval(model, test):
-    logits = model(G.x, G.edge_index)
-    probs = torch.sigmoid(logits)
-    y_pred = (probs > 0.5).long()
-    print(classification_report(G.Attack, y_pred))
-    return y_pred      
-        
-        
-        
-# ------ 
+# ------
 # script
 # ------
 
-with open(INTERM_DIR / 'Bot_IoT/label_encoders.pkl', 'rb') as f:
-    le = pickle.load(f) 
-    attack_encoder = le['Attack']
-    
-test = load_data()
+with open(INTERM_DIR / "Bot_IoT/label_encoders.pkl", "rb") as f:
+    le = pickle.load(f)
+    attack_encoder = le["Attack"]
+
+train, test = load_BotIoT()
 print("loaded data")
 
 print("\nEvaluating ..\n")
 metrics = {}
 epoch_metrics = {}
-for (model, binary_flow, attack) in yeild_attack_problems(
-    test, 
-    models_path=INTERM_DIR / 'Bot_IoT/models/', 
-    label_encoder=attack_encoder
+for model, binary_flow, attack in yeild_attack_problems(
+    test, models_path=INTERM_DIR / "Bot_IoT/models/", label_encoder=attack_encoder
 ):
-    G = motif_linegraph(test)
-    
+
+    G, dgl_g = motif_attached_linegraph(binary_flow)
+
+    x = G.x[:, :49]
+
     # check performance
-    logits = model(G.x, G.edge_index)
+    logits = model(x, G.edge_index)
     probs = torch.sigmoid(logits)
     y_pred = (probs > 0.5).long()
     print(classification_report(G.Attack, y_pred))
-    
+
     # retrive motif information
     is_star, is_fan = G.x[:, 51], G.x[:, 52]
     end_times, start_times = G.x[:, 50], G.x[:, 49]
     scanning_star_nodes = is_star.nonzero(as_tuple=True)[0]
     fan_nodes = is_fan.nonzero(as_tuple=True)[0]
-    src, dst = G.edge_index[0], G.edge_index[1]
+    src, dst = dgl_g.edges()
 
     star_motifs = []
     if attack == "DoS":
@@ -173,8 +120,6 @@ for (model, binary_flow, attack) in yeild_attack_problems(
             if lg_nodes:
                 fan_motifs.append(lg_nodes)
 
-    x = G.x[:, :49]
-
     # setup explainer
     explainer = Explainer(
         model=model,
@@ -185,12 +130,12 @@ for (model, binary_flow, attack) in yeild_attack_problems(
             model=model,
             edge_index=G.edge_index,
             x=x,
-            tv_coef=1.0,
-            motif_coef=0.5,
-            align_coef=0.4,
+            tv_coef=2.0,
+            motif_coef=0.05,
+            align_coef=0.05,
         ),
         explanation_type="phenomenon",
-        node_mask_type="attributes",
+        node_mask_type="attributes",  ## !! should use only level node mask? (object)
         edge_mask_type=None,
         model_config=ModelConfig(
             mode="binary_classification",
@@ -207,7 +152,6 @@ for (model, binary_flow, attack) in yeild_attack_problems(
     )
 
     metrics[attack] = explanation
-
 
     # softmask metrics
     subG_cp = copy.deepcopy(G)
@@ -228,5 +172,5 @@ for (model, binary_flow, attack) in yeild_attack_problems(
 
 # save results
 metrics["epoch metrics"] = explainer.algorithm.epoch_metrics
-with open(INTERM_DIR / 'Bot_IoT/gnne_adapted.pkl', "wb") as f:
+with open(INTERM_DIR / "Bot_IoT/gnne_adapted.pkl", "wb") as f:
     pickle.dump(metrics, f)

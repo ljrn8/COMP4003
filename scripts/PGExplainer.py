@@ -3,171 +3,122 @@ import pickle
 import torch as th
 import torch.nn.functional as F
 import torch
-import networkx as nx
-import pandas as pd
 import numpy as np
-import dgl
 import copy
-
 import torch
 import torch.nn.functional as F
-from torch_geometric.explain import GNNExplainer
-from NIDSExplainer import NIDSExplainer
-
-import torch_geometric
-from torch_geometric.explain import (
-    Explainer,
-    CaptumExplainer,
-    DummyExplainer,
-    GNNExplainer,
-    PGExplainer,
-)
-from torch_geometric.explain.metric import *
-from torch_geometric.nn.models.basic_gnn import GraphSAGE
-from torch_geometric.utils import from_dgl
-from tqdm import tqdm
-from torch_geometric.explain import ModelConfig
 import scienceplots
-from explanations import *
 import torch, networkx as nx, dgl
-from torch_geometric.transforms import LineGraph
-from torch_geometric.utils import from_dgl
-from diptest import diptest
+import torch_geometric
+import os 
 
+from torch_geometric.explain.metric import *
+from torch_geometric.explain import ModelConfig
+from tqdm import tqdm
+from config import INTERM_DIR
+from explanations import (
+    eval, load_BoT_IoT_flows, yield_trained_binary_problems,
+    evaluate_softmask, evaluate_sparsity_threshholds
+)
+from pathlib import Path
+from EGraphSAGE_papercode import PyGWrapper, Model
 
-def load_data():
-    test = pd.read_csv("../interm/BoT_test.csv")
-    attrs = [
-        c
-        for c in test.columns
-        if c
-        not in (
-            "src",
-            "dst",
-            "Attack",
-            "x",
-            "IPV4_SRC_ADDR_metadata",
-            "L4_SRC_PORT_metadata",
-            "IPV4_DST_ADDR_metadata",
-            "L4_DST_PORT_metadata",
+from global_PGExplainer import PGExplainer
+
+from explanations import fidelities
+
+def load_edge_model(path):
+    model = PyGWrapper(
+        Model(
+            ndim_in=49,
+            edim=49,
+            ndim_out=256,
+            classes=1,  
+            activation=F.relu,
+            dropout=0.2,
         )
-    ]
-    test["x"] = test[attrs].values.tolist()
-    return test
-
-
-def motif_linegraph(data: pd.DataFrame):
-
-    # 1) Build NX, then RELABEL to 0..N-1 to avoid gaps/off-by-one
-    nx_g = nx.from_pandas_edgelist(
-        data,
-        source="src",
-        target="dst",
-        edge_attr=["x", "Attack"],
-        create_using=nx.DiGraph(),
     )
-    # nx_g = nx.convert_node_labels_to_integers(nx_g, ordering='sorted') # ! ?
+    model.load_state_dict(torch.load(path))
+    model.eval()
+    return model
 
-    # 2) DGL graph + edge motifs (on *edges*)
-    dgl_g = dgl.from_networkx(nx_g, edge_attrs=["x", "Attack"])
-    src, dst = dgl_g.edges()
-    out_deg = dgl_g.out_degrees()
-    in_deg = dgl_g.in_degrees()
+def masked_prediction(model, G, soft_edge_mask):
+    return (
+        model(G.x, G.edge_index),
+        model(G.x * soft_edge_mask.view(-1, 1), G.edge_index),
+        model(G.x * (1-soft_edge_mask).view(-1, 1), G.edge_index),
+    )
 
-    scanning_star_nodes = (out_deg > 10).nonzero(as_tuple=True)[0]
-    fan_nodes = (in_deg > 10).nonzero(as_tuple=True)[0]
-
-    is_star = torch.isin(src, scanning_star_nodes).to(torch.uint8)
-    is_fan = torch.isin(dst, fan_nodes).to(torch.uint8)
-    new = torch.vstack([is_star, is_fan])
-
-    print(dgl_g.edata["x"].shape)
-    dgl_g.edata["x"] = torch.hstack([dgl_g.edata["x"], new.T])
-    print(dgl_g.edata["x"].shape)
-
-    # dgl_lg = dgl_g.line_graph(shared=True)
-    pyg_lg = from_dgl(dgl_g)
-    pyg_lg.num_nodes = int(pyg_lg.edge_index.max()) + 1
-
-    return pyg_lg
+def evaluate_softmask(model, G, soft_edge_mask):
+    """ Node mask evaluations by applying softmasks !! (erronous in theory)
+    """
+    y_pred, ym_pred, ymi_pred = masked_prediction(model, G, soft_edge_mask)
+    fp, fn = fidelities(y_pred > 0.5, ym_pred > 0.5, ymi_pred > 0.5, G.Attack)
+    c = characterization_score(fp, fn) if (fp * fn) != 0 else 0
+    return fp, fn, c
 
 
-## -- script
+def evaluate_sparsity_threshholds(model, G, softmask, ticks=np.arange(0.1, 1, 0.1)):
+    """ Node mask evaluations by applying thresholded hard masks across specified sparsity levels
+    """
+    sparsity_curve = {'fid+': [], 'fid-': [], 's': [], 'c': [], 'k': []}
+    
+    for s in tqdm(ticks):
+        flat_mask = softmask.flatten()
+        k = int(s * flat_mask.numel())
+        threshold = torch.topk(flat_mask, k).values[-1]
+        new_mask = (softmask >= threshold).float()
+        
+        y_pred, ym_pred, ymi_pred = masked_prediction(model, G, new_mask)
+        fp, fn = fidelities(y_pred > 0.5, ym_pred > 0.5, ymi_pred > 0.5, G.Attack)
+        sparsity_curve['fid+'].append(fp)
+        sparsity_curve['fid-'].append(fn)
+        
+        c = characterization_score(fp, fn) if (fp * fn) != 0 else 0
+        sparsity_curve['c'].append(c)
+        sparsity_curve['s'].append(s)
+        sparsity_curve['k'].append(k)
+            
+    return sparsity_curve
 
-model = GraphSAGE(49, hidden_channels=256, out_channels=5, num_layers=3).to(device)
-model.load_state_dict(th.load("../interm/GraphSAGE_BoTIoT.pth"))
-model.eval()
-print("loaded model")
 
-test = load_data()
-print("loaded data")
 
-pyg_lg = motif_linegraph(test)
-print(f"Dos stars: {pyg_lg.x[:, 51].sum()}, DDos sinks: {pyg_lg.x[:, 52].sum()}")
+# ------
+# script
+# ------
+
+train, test, le = load_BoT_IoT_flows()
 
 metrics = {}
 epoch_metrics = {}
 
+path = INTERM_DIR / 'Bot_IoT/edge_models'
+models = {
+        attack: load_edge_model(Path(path) / attack) for attack in os.listdir(path)
+}
+    
+for model, attack, G in yield_trained_binary_problems(
+    flows=test, models_ensemble_dict=models, 
+    label_encoder=le, node_classification=False
+):
+    print(f'x.shape= {G.x.shape}')
+    print(f'edge_index.shape= {G.edge_index.shape}')
 
-### TODO:
-# alignement loss -> MSE
-
-print("\nEvaluating ..\n")
-for attack, subG in yield_class_graphs(pyg_lg):
-    if attack == "Benign":
-        continue
-
-    print(attack)
-
-    is_star, is_fan = subG.x[:, 51], subG.x[:, 52]
-    end_times, start_times = subG.x[:, 50], subG.x[:, 49]
-    scanning_star_nodes = is_star.nonzero(as_tuple=True)[0]
-    fan_nodes = is_fan.nonzero(as_tuple=True)[0]
-    src, dst = subG.edge_index[0], subG.edge_index[1]
-
-    star_motifs = []
-    if attack == "DoS":
-        for hub in scanning_star_nodes.tolist():
-            lg_nodes = (src == hub).nonzero(as_tuple=True)[0].tolist()
-            if lg_nodes:
-                star_motifs.append(lg_nodes)
-
-    fan_motifs = []
-    # if attack == "DDoS":
-    # 	for sink in fan_nodes.tolist():
-    # 		lg_nodes = (dst == sink).nonzero(as_tuple=True)[0].tolist()
-    # 		if lg_nodes:
-    # 			fan_motifs.append(lg_nodes)
-
-    x = subG.x[:, :49]
-
-    expl = PGExplainer()
-
-    explainer = Explainer(
+    explainer = PGExplainer(
         model=model,
-        algorithm=expl,
-        explanation_type="phenomenon",
-        node_mask_type="attributes",
-        edge_mask_type=None,
-        model_config=ModelConfig(
-            mode="multiclass_classification",
-            task_level="node",
-            return_type="raw",
-        ),
+        emb_dim=256,
+        lr=0.01,
+        epochs=100,
     )
+    
+    edge_mask = explainer.explain(G.x, G.edge_index, G.Attack).view(-1)
 
-    explanation = explainer(
-        x=x,
-        edge_index=subG.edge_index.to(device),
-        target=subG.Attack,
-    )
-
-    metrics[attack] = explanation
-    subG_cp = copy.deepcopy(subG)
-    subG_cp.x = subG_cp.x[:, :49]
+    print('*********************')
+    print(edge_mask.shape)
+    print(G.x.shape)
 
     # softmask metrics
-    fp, fn, c = evaluate_softmask(model, subG_cp, explanation.node_mask)
+    fp, fn, c = evaluate_softmask(model, G, edge_mask)
     metrics[f"{attack} softmask metrics"] = fp, fn, c
     print(f"\tfp: {fp:.3f}")
     print(f"\tfn: {fn:.3f}")
@@ -175,13 +126,9 @@ for attack, subG in yield_class_graphs(pyg_lg):
 
     # sparsity curve
     metrics[f"{attack} sparsity curve"] = evaluate_sparsity_threshholds(
-        model, subG_cp, explanation.node_mask
+        model, G, edge_mask
     )
 
-    del subG_cp
-    epoch_metrics[attack] = explainer.algorithm.epoch_metrics
-
-
-metrics["epoch metrics"] = explainer.algorithm.epoch_metrics
-with open("../interm/gnne_adapted_embedds_only_metrics.pkl", "wb") as f:
+# save results
+with open(INTERM_DIR / "Bot_IoT/pge.pkl", "wb") as f:
     pickle.dump(metrics, f)
